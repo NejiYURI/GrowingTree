@@ -13,10 +13,28 @@ public class CurvePoint
     public float Angle;
 }
 
+[System.Serializable]
+public class GeneratePoint
+{
+    public GeneratePoint(Vector3 _pos, bool _IsGenerate)
+    {
+        this.Pos = _pos;
+        this.GenerateBranch = _IsGenerate;
+    }
+    public Vector3 Pos;
+    public bool GenerateBranch;
+    public MeshGenerator branchControl;
+}
+
 [RequireComponent(typeof(MeshFilter))]
 public class MeshGenerator : MonoBehaviour
 {
     Mesh mesh;
+
+    public GameObject Branch;
+
+    [SerializeField]
+    private List<GameObject> BranchList;
 
     [SerializeField]
     Vector3[] vertices;
@@ -27,9 +45,11 @@ public class MeshGenerator : MonoBehaviour
     public int RowSize = 4;
     public int ColumnSize = 4;
 
+    public int BranchWeight;
+
     public int PointNum = 10;
     [SerializeField]
-    private List<Vector3> PointPos;
+    private List<GeneratePoint> PointPos;
 
     [SerializeField]
     private List<CurvePoint> curvePoints;
@@ -55,13 +75,23 @@ public class MeshGenerator : MonoBehaviour
 
     public void StartGenerate()
     {
+        foreach (var item in BranchList)
+        {
+            Destroy(item.gameObject);
+        }
+        BranchList = new List<GameObject>();
         if (GenerateCoroutine != null)
         {
             StopCoroutine(GenerateCoroutine);
         }
         GeneratePoint();
         DrawCurve();
-        GenerateCoroutine = StartCoroutine(CreateShape());
+#if UNITY_EDITOR
+        if (Application.isPlaying)
+#endif
+            GenerateCoroutine = StartCoroutine(CreateShape());
+
+       
     }
 
     public void ClearFunc()
@@ -86,19 +116,20 @@ public class MeshGenerator : MonoBehaviour
         vertices = new Vector3[(RowSize + 1) * (ColumnSize + 1)];
         float rad = (360 / ColumnSize) * Mathf.PI / 180;
 
-
+        bool BranchSpawn = false;
         for (int i = 0, Row = 0; Row <= RowSize; Row++)
         {
+
             for (int Col = 0; Col <= ColumnSize; Col++)
             {
                 float _CurRadius = Radius * (1 - ((float)Row / RowSize));
 
-                var x = PointPos[Row].x + (Row == RowSize ? 0 : _CurRadius) * Mathf.Cos(rad * Col);
-                var z = PointPos[Row].z + (Row == RowSize ? 0 : _CurRadius) * Mathf.Sin(rad * Col);
-                Vector3 tmpVector = new Vector3(x, PointPos[Row].y, z);
+                var x = PointPos[Row].Pos.x + (Row == RowSize ? 0 : _CurRadius) * Mathf.Cos(rad * Col);
+                var z = PointPos[Row].Pos.z + (Row == RowSize ? 0 : _CurRadius) * Mathf.Sin(rad * Col);
+                Vector3 tmpVector = new Vector3(x, PointPos[Row].Pos.y, z);
                 if (Row != RowSize)
                 {
-                    Vector3 targetDir = PointPos[Row + 1] - PointPos[Row];
+                    Vector3 targetDir = PointPos[Row + 1].Pos - PointPos[Row].Pos;
 
                     Plane p = new Plane(Vector3.forward, Vector3.zero);
                     Vector3 xAxis = Vector3.up;
@@ -109,12 +140,32 @@ public class MeshGenerator : MonoBehaviour
                     }
                     Vector3.OrthoNormalize(ref targetDir, ref xAxis, ref yAxis);
 
-                    tmpVector = PointPos[Row] +
+                    tmpVector = PointPos[Row].Pos +
                 ((Row == RowSize ? 0 : _CurRadius) * Mathf.Cos(rad * Col) * xAxis) +
                 ((Row == RowSize ? 0 : _CurRadius) * Mathf.Sin(rad * Col) * yAxis);
                 }
                 vertices[i] = tmpVector;
                 i++;
+
+
+            }
+
+            if (PointPos[Row].GenerateBranch && BranchWeight>0)
+            {
+                
+                GameObject _branch = Instantiate(Branch, PointPos[Row].Pos, Quaternion.LookRotation(Random.insideUnitSphere.normalized));
+                _branch.transform.SetParent(this.transform);
+                _branch.transform.localPosition = PointPos[Row].Pos;
+                if (_branch.GetComponent<MeshGenerator>() != null)
+                {
+                    PointPos[Row].branchControl = _branch.GetComponent<MeshGenerator>();
+                    PointPos[Row].branchControl.Radius= Radius * (1 - ((float)Row / RowSize));
+                    PointPos[Row].branchControl.BranchWeight = BranchWeight - 1;
+                    PointPos[Row].branchControl.PointNum = Random.Range(1, 5);
+                }
+                BranchList.Add(_branch);
+               
+                BranchSpawn = true;
             }
         }
 
@@ -136,9 +187,15 @@ public class MeshGenerator : MonoBehaviour
 
                 vert++;
                 tris += 6;
-                yield return new WaitForSeconds(0.001f);
+                
             }
             vert++;
+
+            if (PointPos[y].GenerateBranch && PointPos[y].branchControl != null && BranchWeight > 0)
+            {
+                PointPos[y].branchControl.StartGenerate();
+            }
+            yield return new WaitForSeconds(0.001f);
         }
 
 
@@ -147,7 +204,7 @@ public class MeshGenerator : MonoBehaviour
     void GeneratePoint()
     {
         curvePoints = new List<CurvePoint>();
-        PointPos = new List<Vector3>();
+        PointPos = new List<GeneratePoint>();
         for (int i = 0; i < PointNum; i++)
         {
             CurvePoint NewPoint = new CurvePoint();
@@ -155,7 +212,8 @@ public class MeshGenerator : MonoBehaviour
             //set a start point
             if (i == 0)
             {
-                NewPoint.StartPoint = this.transform.position;
+                NewPoint.StartPoint = Vector3.zero;
+
             }
             else
             {
@@ -163,13 +221,23 @@ public class MeshGenerator : MonoBehaviour
             }
 
             #region-BezierMode
-            ////set an end point
-            //NewPoint.EndPoint = NewPoint.StartPoint + new Vector3(Random.Range(-5, 5), Random.Range(5, 10), Random.Range(-5, 5));
-            //Vector3 tmpPnt = NewPoint.StartPoint + ((NewPoint.EndPoint - NewPoint.StartPoint) * (Random.Range(10, 90) / 100));
+            //set an end point
+            NewPoint.EndPoint = NewPoint.StartPoint + new Vector3(Random.Range(-5, 5), Random.Range(10, 20), Random.Range(-5, 5));
+            Vector3 tmpPnt = NewPoint.StartPoint + ((NewPoint.EndPoint - NewPoint.StartPoint) * (Random.Range(10, 90) / 100));
 
-            //float rad = (360 / Random.Range(4, 10)) * Mathf.PI / 180;
+            float rad = (360 / Random.Range(4, 10)) * Mathf.PI / 180;
 
-            //Vector3 targetDir = NewPoint.EndPoint - NewPoint.StartPoint;
+
+            if (i == 0)
+            {
+                Vector3 targetDir = NewPoint.EndPoint - NewPoint.StartPoint;
+                NewPoint.MiddlePoint = targetDir * (Random.Range(40, 60) / 100f) + NewPoint.StartPoint;
+            }
+            else
+            {
+                Vector3 targetDir = NewPoint.StartPoint - curvePoints[i - 1].MiddlePoint;
+                NewPoint.MiddlePoint = NewPoint.StartPoint + targetDir * Random.Range(0.5f, 2f);
+            }
             //Plane p = new Plane(Vector3.forward, Vector3.zero);
             //Vector3 xAxis = Vector3.up;
             //Vector3 yAxis = Vector3.right;
@@ -185,31 +253,32 @@ public class MeshGenerator : MonoBehaviour
             //    (_radius * Mathf.Cos(rad) * xAxis) +
             //    (_radius * Mathf.Sin(rad) * yAxis);
             #endregion
-            if (i == 0)
-            {
-                NewPoint.MiddlePoint = NewPoint.StartPoint + new Vector3(Random.Range(-5, 5), Random.Range(5, 10), Random.Range(-5, 5));
-            }
-            else
-            {
-                Vector3 dir = NewPoint.StartPoint - curvePoints[i - 1].MiddlePoint;
-                NewPoint.MiddlePoint = NewPoint.StartPoint + dir * Random.Range(1, 2);
-            }
+            #region-Biarcs
+            //if (i == 0)
+            //{
+            //    NewPoint.MiddlePoint = NewPoint.StartPoint + new Vector3(Random.Range(-5, 5), Random.Range(5, 10), Random.Range(-5, 5));
+            //}
+            //else
+            //{
+            //    Vector3 dir = NewPoint.StartPoint - curvePoints[i - 1].MiddlePoint;
+            //    NewPoint.MiddlePoint = NewPoint.StartPoint + dir * Random.Range(1, 2);
+            //}
 
-            Vector3 targetDir = NewPoint.StartPoint - NewPoint.MiddlePoint;
-            Vector3 angleVector = new Vector3(Random.Range(-270, 270), Random.Range(-270, 270), Random.Range(-270, 270));
-            Quaternion _RandAngle = Quaternion.Euler(angleVector);
+            //Vector3 targetDir = NewPoint.StartPoint - NewPoint.MiddlePoint;
+            //Vector3 angleVector = new Vector3(Random.Range(-270, 270), Random.Range(-270, 270), Random.Range(-270, 270));
+            //Quaternion _RandAngle = Quaternion.Euler(angleVector);
 
-            NewPoint.EndPoint = _RandAngle * targetDir + NewPoint.MiddlePoint;
+            //NewPoint.EndPoint = _RandAngle * targetDir + NewPoint.MiddlePoint;
 
-            NewPoint.PointCount = Random.Range(40, 50);
-            for (int j = 0; j < NewPoint.PointCount; j++)
-            {
-                if (j == 0 && i != 0) continue;
-                Vector3 newPos = Quaternion.Euler(angleVector * ((float)j / NewPoint.PointCount)) * targetDir + NewPoint.MiddlePoint;
-                PointPos.Add(newPos);
-            }
-            //targetDir = _RandAngle * targetDir;
-            //Debug.Log(targetDir);
+            //NewPoint.PointCount = Random.Range(40, 50);
+            //for (int j = 0; j < NewPoint.PointCount; j++)
+            //{
+            //    if (j == 0 && i != 0) continue;
+            //    Vector3 newPos = Quaternion.Euler(angleVector * ((float)j / NewPoint.PointCount)) * targetDir + NewPoint.MiddlePoint;
+            //    PointPos.Add(newPos);
+            //}
+            #endregion
+
 
 
             //Plane p = new Plane(Vector3.forward, Vector3.zero);
@@ -228,7 +297,7 @@ public class MeshGenerator : MonoBehaviour
             //    (_NewRad * Mathf.Cos(_RandRadius) * xAxis) +
             //    (_NewRad * Mathf.Sin(_RandRadius) * yAxis);
 
-            NewPoint.PointCount = Random.Range(40, 50);
+            NewPoint.PointCount = Random.Range(25, 40);
             curvePoints.Add(NewPoint);
 
         }
@@ -237,18 +306,24 @@ public class MeshGenerator : MonoBehaviour
 
     void DrawCurve()
     {
-        return;
-        PointPos = new List<Vector3>();
+        //return;
+        PointPos = new List<GeneratePoint>();
         for (int i = 0; i < curvePoints.Count; i++)
         {
+
             for (int j = 0; j < curvePoints[i].PointCount; j++)
             {
                 if (j == 0 && i != 0) continue;
-                //float t = j / (float)curvePoints[i].PointCount;
-                //Vector3 newPos = CalculateBezierPoint_Q(t, curvePoints[i].StartPoint, curvePoints[i].MiddlePoint, curvePoints[i].EndPoint);
-                float angle = (j / (float)curvePoints[i].PointCount);
-                Vector3 newPos = CalculateBiarc(angle, curvePoints[i].StartPoint, curvePoints[i].EndPoint, curvePoints[i].MiddlePoint);
+                float t = j / (float)curvePoints[i].PointCount;
+
+                GeneratePoint newPos = new GeneratePoint(CalculateBezierPoint_Q(t, curvePoints[i].StartPoint, curvePoints[i].MiddlePoint, curvePoints[i].EndPoint), j == curvePoints[i].PointCount - 1);
+                //float angle = (j / (float)curvePoints[i].PointCount);
+                //Vector3 newPos = CalculateBiarc(angle, curvePoints[i].StartPoint, curvePoints[i].EndPoint, curvePoints[i].MiddlePoint);
                 PointPos.Add(newPos);
+                //if (j == curvePoints[i].PointCount - 1)
+                //{
+                //    Debug.Log(PointPos.Count - 1);
+                //}
             }
         }
     }
@@ -269,7 +344,7 @@ public class MeshGenerator : MonoBehaviour
         }
         Vector3.OrthoNormalize(ref dir, ref xAxis, ref yAxis);
 
-        return MidP + (Rad * Mathf.Cos(angle - 180 ) * xAxis) + (Rad * Mathf.Sin(angle - 180 ) * yAxis);
+        return MidP + (Rad * Mathf.Cos(angle - 180) * xAxis) + (Rad * Mathf.Sin(angle - 180) * yAxis);
 
     }
 
@@ -314,7 +389,7 @@ public class MeshGenerator : MonoBehaviour
             for (int i = 0; i < PointPos.Count; i++)
             {
                 Gizmos.color = Color.red;
-                Gizmos.DrawSphere(PointPos[i], .1f);
+                Gizmos.DrawSphere(PointPos[i].Pos, .1f);
             }
 
 
