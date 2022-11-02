@@ -1,13 +1,13 @@
 using UnityEngine;
 using UnityEditor;
 
-[CustomEditor(typeof(MeshGenerator))]
+[CustomEditor(typeof(BranchGenerator))]
 public class MeshGeneratorEditor : Editor
 {
     public override void OnInspectorGUI()
     {
         base.OnInspectorGUI();
-        MeshGenerator _meshG = (MeshGenerator)target;
+        BranchGenerator _meshG = (BranchGenerator)target;
         if (GUILayout.Button("Generate"))
         {
             _meshG.StartGenerate();
